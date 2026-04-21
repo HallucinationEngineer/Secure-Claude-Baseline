@@ -163,9 +163,30 @@ cd /path/to/your/project
 The installer will:
 
 - Copy `.claude/`, `.mcp.json`, `.env.example`, and `CLAUDE.md` into the target.
-- Merge instead of overwrite if `settings.json` / `.gitignore` already exist (diff first, ask before clobbering).
+- Union-merge `settings.json` if one already exists (see **Merge semantics** below).
+- Append missing entries to the target's `.gitignore`, `.env.example`, and `CLAUDE.md`.
 - Make the hook scripts executable.
-- Append secret-ignoring entries to the target's `.gitignore`.
+
+### Merge semantics (existing `settings.json`)
+
+The installer performs a **union merge** — it never silently drops a user's
+rule. A timestamped backup is saved as `settings.json.bak.<YYYYMMDDhhmmss>`
+before the file is rewritten.
+
+| Field                       | Rule                                                        |
+|-----------------------------|-------------------------------------------------------------|
+| `permissions.allow` (array) | **Union** — baseline rules first, then any user additions   |
+| `permissions.deny`  (array) | **Union** — baseline + user; a user deny is NEVER dropped   |
+| `permissions.defaultMode`   | **User wins** on conflict                                   |
+| `hooks.<event>`     (array) | **Union** — baseline entries first, then user's; both run   |
+| `env.<key>`                 | **User wins** on conflict (user-only keys preserved)        |
+| `$schema`, other scalars    | **User wins** on conflict                                   |
+
+Re-running the installer against an already-merged file is idempotent — the
+same user+baseline input produces byte-identical output.
+
+Pass `--force` to bypass the merge and overwrite with the raw baseline (the
+backup is still written).
 
 ### Global install (user-level defaults)
 
