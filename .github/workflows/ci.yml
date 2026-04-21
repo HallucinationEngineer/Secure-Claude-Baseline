@@ -1,19 +1,41 @@
 name: CI
 
+# ==============================================================================
+# Pwn-Request hardening (see SECURITY.md § Supply-chain & CI for rationale):
+#   * Trigger is `pull_request`, NEVER `pull_request_target` — PR code runs in
+#     a sandboxed commit with no secrets access and no write perms.
+#   * All third-party actions pinned by full-length commit SHA, not tag —
+#     tags are mutable; SHAs are not. Dependabot (.github/dependabot.yml)
+#     auto-proposes pinned upgrades weekly.
+#   * Workflow-level `permissions:` defaults to the minimum; every job
+#     restates what it needs explicitly so new steps can't silently inherit.
+#   * step-security/harden-runner monitors egress from the runner and will
+#     fail the job if any step attempts unexpected network traffic.
+#   * No `secrets.*` interpolated into `run:` blocks; no `GITHUB_TOKEN`
+#     granted `write` here.
+# ==============================================================================
+
 on:
   push:
     branches: [main]
   pull_request:
 
-permissions:
-  contents: read
+permissions: {}   # deny-all at workflow scope; each job opts in to what it needs
 
 jobs:
   shellcheck:
     name: ShellCheck
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v5
+      - name: Harden runner
+        uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40   # v2.19.0
+        with:
+          egress-policy: audit   # start in audit; flip to `block` once we have a known-good allowlist
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8   # v5.0.0
+        with:
+          persist-credentials: false   # don't leave GITHUB_TOKEN on disk for later steps
       - name: Install shellcheck
         run: sudo apt-get update && sudo apt-get install -y shellcheck
       - name: Lint all shell scripts
@@ -29,8 +51,16 @@ jobs:
   self-test:
     name: bootstrap.sh --verify
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v5
+      - name: Harden runner
+        uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40   # v2.19.0
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8   # v5.0.0
+        with:
+          persist-credentials: false
       - name: Install runtime deps (jq, perl, curl, sqlite3)
         run: |
           sudo apt-get update
@@ -60,8 +90,16 @@ jobs:
   validate-configs:
     name: Validate JSON / YAML
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v5
+      - name: Harden runner
+        uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40   # v2.19.0
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8   # v5.0.0
+        with:
+          persist-credentials: false
       - name: Install jq + yq
         run: |
           sudo apt-get update
@@ -87,10 +125,17 @@ jobs:
   gitleaks:
     name: Self-scan (gitleaks)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v5
+      - name: Harden runner
+        uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40   # v2.19.0
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8   # v5.0.0
         with:
           fetch-depth: 0
+          persist-credentials: false
       - name: Install gitleaks
         run: |
           VERSION=8.18.4

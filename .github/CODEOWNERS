@@ -1,0 +1,44 @@
+# CODEOWNERS — required review for high-trust paths.
+#
+# This file is the primary defense against a "Pwn Request" — a pull request
+# that modifies CI, hooks, or security-relevant config in a way that would
+# execute attacker-controlled code on merge. Anything under a rule below
+# requires the listed owners to approve before the PR can merge, when combined
+# with branch protection's "Require review from Code Owners" setting.
+#
+# ==============================================================================
+# Branch-protection checklist (enable once in repo settings → Branches → main):
+#
+#   [x] Require a pull request before merging
+#   [x] Require approvals (at least 1)
+#   [x] Require review from Code Owners
+#   [x] Dismiss stale pull request approvals when new commits are pushed
+#   [x] Require status checks to pass before merging
+#         - ShellCheck
+#         - bootstrap.sh --verify
+#         - Validate JSON / YAML
+#         - Self-scan (gitleaks)
+#   [x] Require branches to be up to date before merging
+#   [x] Require conversation resolution before merging
+#   [x] Do not allow bypassing the above settings (applies to admins too)
+# ==============================================================================
+
+# Fallback — everything needs at least one maintainer approval.
+*                                   @hallucinationengineer
+
+# CI / GitHub config — the pwn-request primary target.
+/.github/                           @hallucinationengineer
+/.github/workflows/                 @hallucinationengineer
+/.github/CODEOWNERS                 @hallucinationengineer
+/.github/dependabot.yml             @hallucinationengineer
+
+# Hook scripts run on every tool call; compromising one bypasses every
+# guardrail the baseline provides.
+/secure-claude/.claude/hooks/       @hallucinationengineer
+/secure-claude/.claude/settings.json @hallucinationengineer
+
+# Installer — anything here runs in the user's shell on install.
+/bootstrap.sh                       @hallucinationengineer
+
+# Security policy itself.
+/SECURITY.md                        @hallucinationengineer
