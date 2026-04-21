@@ -1,0 +1,12 @@
+{
+  "_comment": "Copy this file to settings.local.json for developer-specific overrides. settings.local.json is GITIGNORED and must never be committed.",
+  "permissions": {
+    "allow": [
+      "Bash(docker:*)",
+      "Bash(kubectl get:*)"
+    ]
+  },
+  "env": {
+    "LOCAL_DEV_MODE": "true"
+  }
+}
