@@ -19,9 +19,18 @@
 #                             before the record leaves the box (default: 1)
 #     CLAUDE_AUDIT_MAX_PREVIEW=2048   max bytes of input_preview to retain
 #
+#   BREAK-GLASS:
+#     CLAUDE_BREAKGLASS=<reason>      if set, recorded on every record as
+#                                     breakglass_reason so audits can filter
+#                                     to overrides.
+#
 # Local failures never break the session. Remote failures are silent by design
 # so that an unreachable SIEM can't wedge the developer's agent.
 set -uo pipefail
+
+LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib"
+# shellcheck source=lib/patterns.sh
+. "${LIB_DIR}/patterns.sh"
 
 EVENT_JSON="$(cat)"
 
@@ -29,6 +38,7 @@ AUDIT_DIR="${CLAUDE_AUDIT_DIR:-.claude/audit}"
 MAX_PREVIEW="${CLAUDE_AUDIT_MAX_PREVIEW:-2048}"
 REDACT="${CLAUDE_AUDIT_REDACT:-1}"
 SINK="${CLAUDE_AUDIT_SINK:-auto}"
+BREAKGLASS="${CLAUDE_BREAKGLASS:-}"
 
 mkdir -p "$AUDIT_DIR" 2>/dev/null || true
 
@@ -37,27 +47,13 @@ TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 # ---- Redact secret-looking values before anything leaves the box ---------
 
 redact() {
-  # stdin → stdout, replacing any known-secret shapes with ***REDACTED***
   local s
   s="$(cat)"
   if [ "$REDACT" != "1" ]; then
     printf '%s' "$s"; return
   fi
-  # We strip high-confidence secret *shapes* (AWS/GH/Slack/OpenAI/private-key)
-  # and JSON-shape credential fields. We do NOT try to catch arbitrary
-  # `password=xxx` in code strings — that's the PreToolUse secret-scan hook's
-  # job, and over-aggressive regex corrupts JSON records.
-  printf '%s' "$s" | perl -pe '
-    s/AKIA[0-9A-Z]{16}/***REDACTED_AWS***/g;
-    s/ASIA[0-9A-Z]{16}/***REDACTED_AWS_STS***/g;
-    s/AIza[0-9A-Za-z_-]{35}/***REDACTED_GOOGLE***/g;
-    s/ghp_[0-9A-Za-z]{36,}/***REDACTED_GH_PAT***/g;
-    s/github_pat_[0-9A-Za-z_]{80,}/***REDACTED_GH_FINEGRAIN***/g;
-    s/xox[baprs]-[0-9A-Za-z-]{10,}/***REDACTED_SLACK***/g;
-    s/sk-[0-9A-Za-z]{32,}/***REDACTED_API_KEY***/g;
-    s/-----BEGIN (RSA |OPENSSH |EC |PGP )?PRIVATE KEY-----[\s\S]*?-----END (RSA |OPENSSH |EC |PGP )?PRIVATE KEY-----/***REDACTED_PRIVATE_KEY***/g;
-    s/"(password|passwd|secret|api[_-]?key|access[_-]?token|auth|bearer|token)"\s*:\s*"[^"]*"/"$1":"***REDACTED***"/gi;
-  ' 2>/dev/null || printf '%s' "$s"   # if perl is missing, pass through
+  # PERL_REDACTION is sourced from lib/patterns.sh — one place to maintain.
+  printf '%s' "$s" | perl -pe "$PERL_REDACTION" 2>/dev/null || printf '%s' "$s"
 }
 
 # ---- Build the normalised record -----------------------------------------
@@ -70,7 +66,7 @@ REDACTED_EVENT="$(printf '%s' "$EVENT_JSON" | redact)"
 
 if command -v jq >/dev/null 2>&1; then
   RECORD_JSON="$(printf '%s' "$REDACTED_EVENT" \
-    | jq -c --arg ts "$TS" --argjson maxprev "$MAX_PREVIEW" '
+    | jq -c --arg ts "$TS" --arg breakglass "$BREAKGLASS" --argjson maxprev "$MAX_PREVIEW" '
         . as $e
         | {
             ts: $ts,
@@ -79,10 +75,12 @@ if command -v jq >/dev/null 2>&1; then
             cwd: ($e.cwd // ""),
             session_id: ($e.session_id // ""),
             input_preview: (($e.tool_input // {}) | tostring | .[0:$maxprev]),
-            blocked: ($e.permission_decision // "")
+            blocked: ($e.permission_decision // ""),
+            breakglass_reason: $breakglass
           }')"
 else
-  RECORD_JSON="$(printf '{"ts":"%s","raw":%s}' "$TS" "$REDACTED_EVENT")"
+  RECORD_JSON="$(printf '{"ts":"%s","breakglass_reason":"%s","raw":%s}' \
+    "$TS" "${BREAKGLASS//\"/\\\"}" "$REDACTED_EVENT")"
 fi
 
 REDACTED_RECORD="$(printf '%s' "$RECORD_JSON" | redact)"
@@ -99,7 +97,6 @@ fi
 
 # ---- Local: SQLite -------------------------------------------------------
 
-# SQL-escape a single string value: double any embedded single quotes.
 sql_quote() {
   local v="$1"
   v="${v//\'/\'\'}"
@@ -113,33 +110,39 @@ write_sqlite() {
 
   sqlite3 "$db" <<'SQL' 2>/dev/null || return 1
 CREATE TABLE IF NOT EXISTS tool_calls (
-  id            INTEGER PRIMARY KEY AUTOINCREMENT,
-  ts            TEXT    NOT NULL,
-  tool          TEXT,
-  event         TEXT,
-  cwd           TEXT,
-  session_id    TEXT,
-  blocked       TEXT,
-  input_preview TEXT,
-  raw           TEXT
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts                TEXT    NOT NULL,
+  tool              TEXT,
+  event             TEXT,
+  cwd               TEXT,
+  session_id        TEXT,
+  blocked           TEXT,
+  breakglass_reason TEXT,
+  input_preview     TEXT,
+  raw               TEXT
 );
-CREATE INDEX IF NOT EXISTS idx_tc_ts      ON tool_calls(ts);
-CREATE INDEX IF NOT EXISTS idx_tc_tool    ON tool_calls(tool);
-CREATE INDEX IF NOT EXISTS idx_tc_session ON tool_calls(session_id);
-CREATE INDEX IF NOT EXISTS idx_tc_blocked ON tool_calls(blocked);
+CREATE INDEX IF NOT EXISTS idx_tc_ts         ON tool_calls(ts);
+CREATE INDEX IF NOT EXISTS idx_tc_tool       ON tool_calls(tool);
+CREATE INDEX IF NOT EXISTS idx_tc_session    ON tool_calls(session_id);
+CREATE INDEX IF NOT EXISTS idx_tc_blocked    ON tool_calls(blocked);
+CREATE INDEX IF NOT EXISTS idx_tc_breakglass ON tool_calls(breakglass_reason);
 SQL
 
-  local ts tool event cwd session_id blocked input_preview
-  ts="$(printf '%s' "$REDACTED_RECORD"            | jq -r '.ts // ""')"
-  tool="$(printf '%s' "$REDACTED_RECORD"          | jq -r '.tool // ""')"
-  event="$(printf '%s' "$REDACTED_RECORD"         | jq -r '.event // ""')"
-  cwd="$(printf '%s' "$REDACTED_RECORD"           | jq -r '.cwd // ""')"
-  session_id="$(printf '%s' "$REDACTED_RECORD"    | jq -r '.session_id // ""')"
-  blocked="$(printf '%s' "$REDACTED_RECORD"       | jq -r '.blocked // ""')"
-  input_preview="$(printf '%s' "$REDACTED_RECORD" | jq -r '.input_preview // ""')"
+  # Idempotently add breakglass_reason column for upgrades from older DBs.
+  sqlite3 "$db" "ALTER TABLE tool_calls ADD COLUMN breakglass_reason TEXT;" 2>/dev/null || true
+
+  local ts tool event cwd session_id blocked breakglass_reason input_preview
+  ts="$(printf                '%s' "$REDACTED_RECORD" | jq -r '.ts                // ""')"
+  tool="$(printf              '%s' "$REDACTED_RECORD" | jq -r '.tool              // ""')"
+  event="$(printf             '%s' "$REDACTED_RECORD" | jq -r '.event             // ""')"
+  cwd="$(printf               '%s' "$REDACTED_RECORD" | jq -r '.cwd               // ""')"
+  session_id="$(printf        '%s' "$REDACTED_RECORD" | jq -r '.session_id        // ""')"
+  blocked="$(printf           '%s' "$REDACTED_RECORD" | jq -r '.blocked           // ""')"
+  breakglass_reason="$(printf '%s' "$REDACTED_RECORD" | jq -r '.breakglass_reason // ""')"
+  input_preview="$(printf     '%s' "$REDACTED_RECORD" | jq -r '.input_preview     // ""')"
 
   local sql
-  sql="INSERT INTO tool_calls (ts, tool, event, cwd, session_id, blocked, input_preview, raw) VALUES ($(sql_quote "$ts"), $(sql_quote "$tool"), $(sql_quote "$event"), $(sql_quote "$cwd"), $(sql_quote "$session_id"), $(sql_quote "$blocked"), $(sql_quote "$input_preview"), $(sql_quote "$REDACTED_RECORD"));"
+  sql="INSERT INTO tool_calls (ts, tool, event, cwd, session_id, blocked, breakglass_reason, input_preview, raw) VALUES ($(sql_quote "$ts"), $(sql_quote "$tool"), $(sql_quote "$event"), $(sql_quote "$cwd"), $(sql_quote "$session_id"), $(sql_quote "$blocked"), $(sql_quote "$breakglass_reason"), $(sql_quote "$input_preview"), $(sql_quote "$REDACTED_RECORD"));"
 
   printf '%s\n' "$sql" | sqlite3 "$db" 2>/dev/null
 }
@@ -149,7 +152,7 @@ write_jsonl() {
 }
 
 case "$SINK" in
-  sqlite) write_sqlite || write_jsonl ;;      # fall back if sqlite fails
+  sqlite) write_sqlite || write_jsonl ;;
   jsonl)  write_jsonl ;;
   both)   write_sqlite; write_jsonl ;;
   none)   : ;;
@@ -157,8 +160,6 @@ case "$SINK" in
 esac
 
 # ---- Remote: fire-and-forget ---------------------------------------------
-# We run curl in the background, detach it from the shell, and redirect all
-# output so a slow/broken SIEM can never stall the agent.
 
 post_remote() {
   local url="$1"; shift

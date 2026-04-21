@@ -33,18 +33,11 @@ if command -v gitleaks >/dev/null 2>&1; then
     exit 2
   fi
 else
-  # Minimal, portable fallback (not a substitute for gitleaks)
-  PATTERNS=(
-    'AKIA[0-9A-Z]{16}'                       # AWS access key id
-    'ASIA[0-9A-Z]{16}'                       # AWS STS key id
-    'AIza[0-9A-Za-z_-]{35}'                  # Google API key
-    'ghp_[0-9A-Za-z]{36,}'                   # GitHub PAT
-    'github_pat_[0-9A-Za-z_]{80,}'           # GitHub fine-grained PAT
-    'xox[baprs]-[0-9A-Za-z-]{10,}'           # Slack
-    'sk-[0-9A-Za-z]{32,}'                    # OpenAI / Anthropic-style
-    '-----BEGIN (RSA |OPENSSH |EC |PGP )?PRIVATE KEY-----'
-  )
-  for p in "${PATTERNS[@]}"; do
+  # Regex fallback — pattern list lives in lib/patterns.sh
+  LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib"
+  # shellcheck source=lib/patterns.sh
+  . "${LIB_DIR}/patterns.sh"
+  for p in "${SECRET_TOKEN_PATTERNS[@]}"; do
     if printf '%s' "$CONTENT" | grep -Eq "$p"; then
       echo "BLOCKED: secret-like pattern matched (/${p}/) in proposed write to '${FILE_PATH:-<unknown>}'." >&2
       echo "Hint: use an environment variable or the secrets manager instead." >&2

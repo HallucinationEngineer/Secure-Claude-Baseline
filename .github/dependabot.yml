@@ -1,0 +1,25 @@
+# Dependabot — auto-propose pinned SHA upgrades for GitHub Actions every week.
+# Because every action in the workflow is pinned by full-length SHA (see
+# SECURITY.md § Supply-chain), upgrades arrive as PRs that bump the SHA and
+# show the diff of what we're actually running. Never auto-merge; maintainer
+# review required (see CODEOWNERS).
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci(deps)"
+    labels:
+      - dependencies
+      - github-actions
+    # Keep major version bumps visible — don't auto-group them with minor bumps.
+    groups:
+      actions-minor-patch:
+        update-types:
+          - minor
+          - patch

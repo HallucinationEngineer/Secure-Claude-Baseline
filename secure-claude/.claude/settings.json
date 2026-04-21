@@ -56,6 +56,15 @@
             "command": ".claude/hooks/block-destructive.sh"
           }
         ]
+      },
+      {
+        "matcher": "Read|WebFetch|WebSearch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/prompt-injection-scan.sh"
+          }
+        ]
       }
     ],
     "PostToolUse": [

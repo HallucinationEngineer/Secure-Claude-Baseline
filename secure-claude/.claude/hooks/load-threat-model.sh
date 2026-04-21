@@ -23,10 +23,11 @@ done
 cat <<'EOF'
 # No threat model found
 
-This project has no threat-model document. Consider running:
+This project has no threat-model document. To create one:
 
-    /threat-model <component>
-
-and saving the output to docs/threat-model.md so it loads automatically at session start.
+  1. cp docs/threat-model.md.example docs/threat-model.md   (if the template is present)
+  2. Or run:  /threat-model <component>
+  3. Fill in the TODO sections, commit, and the SessionStart hook will load
+     it into context on the next session.
 EOF
 exit 0
