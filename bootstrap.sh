@@ -74,6 +74,55 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
+# ---- settings.json merge --------------------------------------------------
+# Merge policy (user-wins unless it would silently drop security) :
+#   permissions.allow  : UNION, baseline order first, dedup  (never lose user allows)
+#   permissions.deny   : UNION, baseline order first, dedup  (NEVER silently drop a deny)
+#   permissions.*      : user wins on conflict               (defaultMode etc.)
+#   hooks.<event>      : UNION of entries, baseline first, dedup on exact equality
+#   env.<key>          : user wins on conflict
+#   top-level scalars  : user wins on conflict
+#
+# Written as a jq program fed two JSON docs via --slurpfile: $user, $baseline.
+
+merge_settings_json() {
+  local user_file="$1" baseline_file="$2" out_file="$3"
+
+  jq -n --slurpfile user "$user_file" --slurpfile baseline "$baseline_file" '
+    # Append $y onto $x, preserving $x order, dropping entries already in $x.
+    def preserve_dedup(x; y):
+      ((x // []) + ((y // []) - (x // [])));
+
+    ($user[0] // {})     as $u
+    | ($baseline[0] // {}) as $b
+
+    # Seed: baseline, then recursive-merge user on top (user wins for scalars/objects).
+    | ($b * $u) as $merged
+
+    # Override the array fields with unions (baseline order first, then any new user rules).
+    | $merged
+    | (if ($b.permissions.allow != null) or ($u.permissions.allow != null) then
+         .permissions.allow = preserve_dedup($b.permissions.allow; $u.permissions.allow)
+       else . end)
+    | (if ($b.permissions.deny != null) or ($u.permissions.deny != null) then
+         .permissions.deny  = preserve_dedup($b.permissions.deny;  $u.permissions.deny)
+       else . end)
+
+    # Hooks: union per event matcher, baseline first, dedup on exact equality.
+    | (
+        ($b.hooks // {}) as $bh
+        | ($u.hooks // {}) as $uh
+        | if ($bh == {} and $uh == {}) then .
+          else .hooks = (
+            ((($bh | keys) + ($uh | keys)) | unique) as $events
+            | reduce $events[] as $ev ({};
+                . + { ($ev): preserve_dedup($bh[$ev]; $uh[$ev]) }
+              )
+          ) end
+      )
+  ' > "$out_file"
+}
+
 # ---- Self-test (--verify) --------------------------------------------------
 # Exercises every hook with synthetic events and asserts expected behaviour.
 # Exits 0 if all checks pass, 1 if any fail.
@@ -229,6 +278,97 @@ run_verify() {
       ok "audit-log.sh redacted AWS token before writing"
     fi
   fi
+  echo
+
+  # ---- settings.json merge behaviour ------------------------------------
+  echo "settings.json merge"
+
+  # Craft a user settings.json with values that MUST survive a merge:
+  #   - a unique allow rule        → must appear in output
+  #   - a unique deny rule         → MUST survive (silently dropping a deny is the nightmare case)
+  #   - a hook on the same matcher as a baseline hook → both must be present
+  #   - an env var that also exists in baseline (user value must win)
+  #   - a scalar (defaultMode) baseline also sets (user value must win)
+  cat > "${tmp}/user-settings.json" <<'JSON'
+  {
+    "permissions": {
+      "allow": ["Bash(docker:*)"],
+      "deny":  ["Read(**/*.pem)"],
+      "defaultMode": "ask"
+    },
+    "hooks": {
+      "PreToolUse": [
+        {
+          "matcher": "Write|Edit|MultiEdit",
+          "hooks": [{"type": "command", "command": ".claude/hooks/team-custom.sh"}]
+        }
+      ]
+    },
+    "env": {
+      "MAX_THINKING_TOKENS": "20000",
+      "MY_CUSTOM_VAR": "preserved"
+    }
+  }
+JSON
+
+  merge_settings_json "${tmp}/user-settings.json" "${SOURCE_DIR}/.claude/settings.json" "${tmp}/merged.json"
+  if ! jq empty "${tmp}/merged.json" 2>/dev/null; then
+    fail "merge produced invalid JSON"
+  else
+    ok "merge produces valid JSON"
+
+    # User's unique deny rule MUST survive
+    if jq -e '.permissions.deny | index("Read(**/*.pem)")' "${tmp}/merged.json" >/dev/null; then
+      ok "merge preserves user's unique deny rule"
+    else
+      fail "merge DROPPED a user's deny rule (Read(**/*.pem))"
+    fi
+
+    # Baseline's deny rules must also be present
+    if jq -e '.permissions.deny | index("Read(.env)")' "${tmp}/merged.json" >/dev/null; then
+      ok "merge preserves baseline's deny rules"
+    else
+      fail "merge dropped baseline's deny rule (Read(.env))"
+    fi
+
+    # User's unique allow rule survives, baseline's allow rules also present
+    if jq -e '.permissions.allow | index("Bash(docker:*)")' "${tmp}/merged.json" >/dev/null \
+       && jq -e '.permissions.allow | index("Read")' "${tmp}/merged.json" >/dev/null; then
+      ok "merge unions allow rules"
+    else
+      fail "merge did not union allow rules correctly"
+    fi
+
+    # User's hook on same matcher coexists with baseline's secret-scan hook
+    if jq -e '.hooks.PreToolUse | map(.hooks[].command) | flatten | contains([".claude/hooks/secret-scan.sh",".claude/hooks/team-custom.sh"])' "${tmp}/merged.json" >/dev/null; then
+      ok "merge preserves user's hook AND baseline's hook on same event"
+    else
+      fail "merge did not union hooks correctly"
+    fi
+
+    # User's env value wins on conflict
+    local mtt
+    mtt="$(jq -r '.env.MAX_THINKING_TOKENS' "${tmp}/merged.json")"
+    if [ "$mtt" = "20000" ]; then
+      ok "merge: user env value wins on conflict"
+    else
+      fail "merge: user's env value got overwritten (got '$mtt', expected '20000')"
+    fi
+
+    # User-only env var preserved
+    if [ "$(jq -r '.env.MY_CUSTOM_VAR' "${tmp}/merged.json")" = "preserved" ]; then
+      ok "merge preserves user-only env var"
+    else
+      fail "merge dropped user-only env var"
+    fi
+
+    # User's scalar choice wins on conflict
+    if [ "$(jq -r '.permissions.defaultMode' "${tmp}/merged.json")" = "ask" ]; then
+      ok "merge: user scalar wins on conflict (defaultMode)"
+    else
+      fail "merge: user's defaultMode got overwritten"
+    fi
+  fi
 
   echo
   printf 'Summary: %s%d pass%s, %s%d fail%s, %s%d warn%s\n' \
@@ -336,17 +476,25 @@ install_claude_tree() {
 
   act "mkdir -p \"$dest\""
 
-  # settings.json — merge if one already exists
+  # settings.json — union-merge if one already exists (keeps user's allows,
+  # NEVER drops a user's deny, preserves user's hooks alongside baseline's).
   if [ -f "${dest}/settings.json" ] && [ "$MERGE" -eq 1 ] && [ "$FORCE" -eq 0 ]; then
     log "settings.json exists — merging (requires jq)"
     if command -v jq >/dev/null 2>&1; then
       if [ "$DRY_RUN" -eq 0 ]; then
         local tmp; tmp="$(mktemp)"
-        jq -s '.[0] * .[1]' "${dest}/settings.json" "${src}/settings.json" > "$tmp"
-        cp "$tmp" "${dest}/settings.json"
-        rm -f "$tmp"
+        if merge_settings_json "${dest}/settings.json" "${src}/settings.json" "$tmp"; then
+          # Keep a timestamped backup of the user's original, just in case.
+          cp "${dest}/settings.json" "${dest}/settings.json.bak.$(date +%Y%m%d%H%M%S)"
+          mv "$tmp" "${dest}/settings.json"
+          log "  merged — original saved as settings.json.bak.<timestamp>"
+        else
+          log "  merge failed — leaving existing settings.json untouched, baseline at settings.json.baseline.json"
+          cp "${src}/settings.json" "${dest}/settings.json.baseline.json"
+          rm -f "$tmp"
+        fi
       else
-        log "[dry-run] jq -s '.[0] * .[1]' existing baseline > settings.json"
+        log "[dry-run] merge_settings_json existing baseline → settings.json (keeps backup .bak.<ts>)"
       fi
     else
       log "  jq missing — falling back to side-by-side copy at settings.json.baseline.json"
