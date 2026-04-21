@@ -13,7 +13,7 @@ jobs:
     name: ShellCheck
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install shellcheck
         run: sudo apt-get update && sudo apt-get install -y shellcheck
       - name: Lint all shell scripts
@@ -30,7 +30,7 @@ jobs:
     name: bootstrap.sh --verify
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install runtime deps (jq, perl, curl, sqlite3)
         run: |
           sudo apt-get update
@@ -61,7 +61,7 @@ jobs:
     name: Validate JSON / YAML
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install jq + yq
         run: |
           sudo apt-get update
@@ -88,7 +88,7 @@ jobs:
     name: Self-scan (gitleaks)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
       - name: Install gitleaks
