@@ -1,0 +1,16 @@
+# Secrets — NEVER commit these
+.env
+.env.local
+.env.*.local
+
+# Claude Code — local-only files
+.claude/settings.local.json
+.claude/audit/
+.claude/.cache/
+
+# Node / common build artefacts
+node_modules/
+dist/
+build/
+coverage/
+.DS_Store
