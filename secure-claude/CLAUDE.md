@@ -10,7 +10,7 @@ This project follows the **Secure Claude Baseline**. In practice that means:
 2. **Filesystem MCP is scoped to the project root.** No access above.
 3. **Every `Write`/`Edit` runs through `gitleaks`** via the PreToolUse hook at `.claude/hooks/secret-scan.sh`.
 4. **Any database MCP must use a read-only role.** Writes go through normal CI, not through the agent.
-5. **Every tool call is logged** to `.claude/audit/tool-calls.jsonl` for post-hoc review.
+5. **Every tool call is logged.** Local-first (SQLite `.claude/audit/tool-calls.db`, JSONL fallback) with optional remote forwarding to Sumo or any HTTPS endpoint (Splunk HEC, Datadog, ELK). High-confidence secret shapes are redacted before anything leaves the box.
 
 If you need to relax a guardrail for a one-off task, document it in the PR description and revert before merging.
 

@@ -44,7 +44,7 @@ secure-claude/
     │   ├── load-threat-model.sh           SessionStart: inject docs/threat-model.md into context
     │   ├── snapshot-session.sh            PreCompact: archive transcript before context is lost
     │   ├── notify-critical.sh             Notification: Slack webhook for high-signal events
-    │   └── audit-log.sh                   PostToolUse: append JSON-line audit record
+    │   └── audit-log.sh                   PostToolUse: SQLite + optional Sumo/HTTPS forward
     └── plugins/.gitkeep
 ```
 
@@ -54,7 +54,7 @@ secure-claude/
 2. **Scope the filesystem MCP to the project root** — `.mcp.json` uses `${PROJECT_ROOT}`.
 3. **PreToolUse hook runs gitleaks on every Write** — see `hooks/secret-scan.sh`.
 4. **Read-only credentials for any database MCP** — if you add one, scope it to SELECT-only.
-5. **Log every tool call** — `hooks/audit-log.sh` appends to `.claude/audit/tool-calls.jsonl`.
+5. **Log every tool call** — `hooks/audit-log.sh` writes to a local SQLite DB (`.claude/audit/tool-calls.db`, JSONL fallback) and optionally forwards to Sumo Logic, Splunk HEC, Datadog, or any HTTPS endpoint. Secret shapes are redacted before leaving the box.
 
 ---
 
@@ -108,7 +108,63 @@ Prints every action without touching disk.
    brew install gitleaks   # or: go install github.com/gitleaks/gitleaks/v8@latest
    ```
 3. (Optional) Export `SLACK_WEBHOOK_URL` to enable the Notification hook.
-4. Open the project in Claude Code and run `/security-review` on your next diff.
+4. (Optional) Configure the audit sink — see **Audit trail** below.
+5. Open the project in Claude Code and run `/security-review` on your next diff.
+
+---
+
+## Audit trail
+
+`hooks/audit-log.sh` runs on every `PostToolUse` event. It is:
+
+- **Local-first** — records are written to disk before any remote POST, so a
+  flaky SIEM or offline dev can't lose the trail.
+- **Pluggable** — pick your sinks with env vars (no code edits needed).
+- **Redacted** — high-confidence secret shapes (AWS / GitHub / Slack / OpenAI /
+  private keys) and JSON credential keys (`password`, `api_key`, `token`, …)
+  are stripped before anything is persisted or forwarded.
+
+### Local sinks
+
+| `CLAUDE_AUDIT_SINK` | Behaviour                                                           |
+|---------------------|---------------------------------------------------------------------|
+| `auto` (default)    | SQLite if `sqlite3` is on PATH, else JSONL                          |
+| `sqlite`            | `.claude/audit/tool-calls.db` (indexed on ts, tool, session_id)     |
+| `jsonl`             | `.claude/audit/tool-calls.jsonl` (one JSON record per line)         |
+| `both`              | Write to both (useful during migration)                             |
+| `none`              | Skip local sink — only makes sense with a remote sink configured    |
+
+Query examples (SQLite):
+
+```bash
+# All blocked tool calls today
+sqlite3 .claude/audit/tool-calls.db \
+  "SELECT ts, tool, input_preview FROM tool_calls
+    WHERE blocked != '' AND ts > date('now');"
+
+# Top tools by call count for the current session
+sqlite3 .claude/audit/tool-calls.db \
+  "SELECT tool, count(*) FROM tool_calls GROUP BY tool ORDER BY 2 DESC;"
+```
+
+### Remote sinks (optional, fire-and-forget)
+
+| Env var                   | Target                                                 |
+|---------------------------|--------------------------------------------------------|
+| `CLAUDE_AUDIT_SUMO_URL`   | Sumo Logic HTTP Source collector URL                   |
+| `CLAUDE_AUDIT_HTTP_URL`   | Generic HTTPS endpoint (Splunk HEC, Datadog, ELK, …)   |
+| `CLAUDE_AUDIT_HTTP_AUTH`  | `Authorization` header value for the generic HTTPS URL |
+
+Both remote sinks can run in parallel. Each POST is detached via `disown` with
+a 5s timeout, so slow endpoints never stall the agent.
+
+### Customising retention / rotation
+
+The hook doesn't rotate for you — pick one:
+
+- **SQLite**: `DELETE FROM tool_calls WHERE ts < datetime('now', '-30 days'); VACUUM;` in a cron job.
+- **JSONL**: drop `logrotate.d/claude-audit` with a `daily rotate 14 compress` policy.
+- **Remote-only** (`CLAUDE_AUDIT_SINK=none`): retention is your SIEM's problem, not yours.
 
 ---
 
