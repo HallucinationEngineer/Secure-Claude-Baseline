@@ -44,7 +44,9 @@ secure-claude/
     │   ├── load-threat-model.sh           SessionStart: inject docs/threat-model.md into context
     │   ├── snapshot-session.sh            PreCompact: archive transcript before context is lost
     │   ├── notify-critical.sh             Notification: Slack webhook for high-signal events
-    │   └── audit-log.sh                   PostToolUse: SQLite + optional Sumo/HTTPS forward
+    │   ├── audit-log.sh                   PostToolUse: SQLite + optional Sumo/HTTPS forward
+    │   ├── prompt-injection-scan.sh       PreToolUse (Read/WebFetch/WebSearch): injection warnings
+    │   └── lib/patterns.sh                shared regex library sourced by every hook
     └── plugins/.gitkeep
 ```
 
@@ -182,6 +184,69 @@ Claude Code that doesn't define its own `.claude/`. It will NOT copy `CLAUDE.md`
 ```
 
 Prints every action without touching disk.
+
+### Self-test (`--verify`)
+
+Exercises every hook with synthetic events and asserts expected behaviour.
+Run this after install (or in CI) to confirm the baseline is actually wired up:
+
+```bash
+./bootstrap.sh --verify
+```
+
+Outputs a pass/fail line per check:
+
+- Required deps present (`bash`, `jq`, `perl`, `curl`) + optional (`sqlite3`, `gitleaks`)
+- Every hook file exists, is executable, and passes `bash -n`
+- `settings.json` / `.mcp.json` parse as valid JSON
+- `secret-scan.sh` blocks an AWS token and allows benign content
+- `block-destructive.sh` blocks `rm -rf /`, allows `ls -la`, and `CLAUDE_BREAKGLASS` bypass works with an audit entry
+- `prompt-injection-scan.sh` warns on a canonical injection phrase and stays silent on benign content
+- `audit-log.sh` writes a record and the redactor actually redacts
+
+Exits 0 if all checks pass, 1 if any fail.
+
+---
+
+## Break-glass override
+
+When a legitimately-needed command gets caught by `block-destructive.sh`,
+instead of disabling the hook, set:
+
+```bash
+CLAUDE_BREAKGLASS="INC-4321: rotating old host, approved by $USER"
+```
+
+That single session will allow the normally-blocked command, but every
+bypass is written to `.claude/audit/breakglass.log` with the reason, the
+matching pattern, the exact command, and the user — so it's impossible
+to use silently. `audit-log.sh` also tags every record in the session
+with `breakglass_reason`, making forensic queries trivial:
+
+```bash
+sqlite3 .claude/audit/tool-calls.db \
+  "SELECT ts, cwd, input_preview FROM tool_calls
+    WHERE breakglass_reason != '' ORDER BY ts DESC;"
+```
+
+---
+
+## Prompt-injection detection
+
+`hooks/prompt-injection-scan.sh` runs on every `Read`, `WebFetch`, and
+`WebSearch` and flags content that looks like it's trying to hijack the
+agent — canonical "ignore previous instructions" phrasing, chat-markup
+smuggling (`<|system|>`), tool-call shape smuggling (`<tool_use>`), and
+Unicode tag-block invisible-text injection (U+E0000..U+E007F).
+
+Modes:
+- `CLAUDE_PROMPT_INJECTION=warn` (default) — warns on stderr, lets the read proceed
+- `CLAUDE_PROMPT_INJECTION=block` — exits 2 and refuses the read
+- `CLAUDE_PROMPT_INJECTION=off`   — disables the check
+
+`warn` is the default because blocking reads on every README with the word
+"instructions" is too disruptive; the warning surfaces through Claude's
+context so the model knows to treat the content as untrusted.
 
 ---
 

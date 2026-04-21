@@ -1,0 +1,124 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  shellcheck:
+    name: ShellCheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - name: Lint all shell scripts
+        run: |
+          set -e
+          # SC1091 = sourced file not followable by static analysis — expected
+          # because lib/patterns.sh is resolved at runtime.
+          shellcheck --severity=warning --exclude=SC1091 \
+            bootstrap.sh \
+            secure-claude/.claude/hooks/*.sh \
+            secure-claude/.claude/hooks/lib/*.sh
+
+  self-test:
+    name: bootstrap.sh --verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install runtime deps (jq, perl, curl, sqlite3)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq perl curl sqlite3
+      - name: Install gitleaks
+        run: |
+          VERSION=8.18.4
+          curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_x64.tar.gz" \
+            | sudo tar -xz -C /usr/local/bin gitleaks
+          gitleaks version
+      - name: Run self-test
+        run: ./bootstrap.sh --verify
+      - name: Dry-run install matrix
+        run: |
+          mkdir -p /tmp/ci-local /tmp/ci-global-home
+          ./bootstrap.sh --local /tmp/ci-local --force --dry-run
+          HOME=/tmp/ci-global-home ./bootstrap.sh --global --force --dry-run
+      - name: Real install smoke test
+        run: |
+          mkdir -p /tmp/ci-real
+          ./bootstrap.sh --local /tmp/ci-real --force
+          test -x /tmp/ci-real/.claude/hooks/secret-scan.sh
+          test -f /tmp/ci-real/.claude/hooks/lib/patterns.sh
+          test -f /tmp/ci-real/docs/threat-model.md.example
+          test -f /tmp/ci-real/.mcp.json
+
+  validate-configs:
+    name: Validate JSON / YAML
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install jq + yq
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq
+          sudo curl -sSL -o /usr/local/bin/yq \
+            https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+      - name: Validate all JSON
+        run: |
+          set -e
+          for f in $(find . -name '*.json' -not -path './node_modules/*' -not -path './.git/*'); do
+            echo "→ $f"
+            jq empty "$f"
+          done
+      - name: Validate all YAML
+        run: |
+          set -e
+          for f in $(find . -name '*.yml' -o -name '*.yaml' -not -path './.git/*'); do
+            echo "→ $f"
+            yq '.' "$f" > /dev/null
+          done
+
+  gitleaks:
+    name: Self-scan (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install gitleaks
+        run: |
+          VERSION=8.18.4
+          curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_x64.tar.gz" \
+            | sudo tar -xz -C /usr/local/bin gitleaks
+      - name: Scan repo history
+        run: |
+          # The repo contains example secret *shapes* in self-test fixtures
+          # (e.g. AKIAIOSFODNN7EXAMPLE from AWS docs) — not real secrets.
+          # Allow them via a config-level allowlist.
+          cat > .gitleaks.toml <<'TOML'
+          [extend]
+          useDefault = true
+
+          [allowlist]
+          description = "Self-test fixtures and example tokens from official docs"
+          regexes = [
+            "AKIAIOSFODNN7EXAMPLE",
+            "github_pat_xxxxxxxx",
+            "sk-abcdefghijklmnopqrstuvwxyz1234567890",
+          ]
+          paths = [
+            '''secure-claude/.env.example''',
+            '''secure-claude/.claude/hooks/lib/patterns.sh''',
+            '''secure-claude/.claude/hooks/secret-scan.sh''',
+            '''secure-claude/.claude/hooks/audit-log.sh''',
+            '''bootstrap.sh''',
+            '''.github/workflows/ci.yml''',
+          ]
+          TOML
+          gitleaks detect --source . --no-banner --redact --config .gitleaks.toml
