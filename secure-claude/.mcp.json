@@ -8,14 +8,6 @@
         "GITHUB_PERSONAL_ACCESS_TOKEN": "${GH_PAT_READONLY}"
       }
     },
-    "postgres": {
-      "type": "stdio",
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-postgres", "${DB_RO_URL}"],
-      "env": {
-        "DATABASE_URL": "${DB_RO_URL}"
-      }
-    },
     "filesystem": {
       "type": "stdio",
       "command": "npx",

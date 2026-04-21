@@ -300,11 +300,10 @@ echo
 echo "Next steps:"
 if [ "$MODE" = "local" ]; then
   echo "  1. cd \"${TARGET}\" && cp .env.example .env      # fill in real values"
-  echo "  2. Create a read-only Postgres role (see .env.example for the SQL)."
-  echo "  3. Install gitleaks so the PreToolUse hook has teeth:"
+  echo "  2. Install gitleaks so the PreToolUse hook has teeth:"
   echo "       brew install gitleaks   # or: go install github.com/gitleaks/gitleaks/v8@latest"
-  echo "  4. Review .claude/settings.json allow/deny lists and tighten for your project."
-  echo "  5. Open the project in Claude Code and run  /security-review  on your next diff."
+  echo "  3. Review .claude/settings.json allow/deny lists and tighten for your project."
+  echo "  4. Open the project in Claude Code and run  /security-review  on your next diff."
 else
   echo "  1. Install gitleaks so the PreToolUse hook has teeth:"
   echo "       brew install gitleaks   # or: go install github.com/gitleaks/gitleaks/v8@latest"

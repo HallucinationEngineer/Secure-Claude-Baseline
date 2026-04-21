@@ -9,7 +9,7 @@ This project follows the **Secure Claude Baseline**. In practice that means:
 1. **`.env` is never committed.** Secrets live in a secrets manager in prod and in `.env` (gitignored) locally. `.env.example` documents the keys.
 2. **Filesystem MCP is scoped to the project root.** No access above.
 3. **Every `Write`/`Edit` runs through `gitleaks`** via the PreToolUse hook at `.claude/hooks/secret-scan.sh`.
-4. **Postgres MCP uses a read-only DB user.** Migrations happen through normal CI, not through the agent.
+4. **Any database MCP must use a read-only role.** Writes go through normal CI, not through the agent.
 5. **Every tool call is logged** to `.claude/audit/tool-calls.jsonl` for post-hoc review.
 
 If you need to relax a guardrail for a one-off task, document it in the PR description and revert before merging.

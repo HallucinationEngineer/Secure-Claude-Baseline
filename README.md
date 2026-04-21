@@ -20,7 +20,7 @@ installer that can target either a single project (local) or your user home (glo
 ```
 secure-claude/
 ├── CLAUDE.md                              project conventions loaded every session
-├── .mcp.json                              MCP servers (GH read-only, Postgres read-only, scoped FS)
+├── .mcp.json                              MCP servers (GH read-only, scoped FS)
 ├── .env.example                           committed; .env never is
 ├── .gitignore                             ignores .env + settings.local.json + .claude/audit/
 └── .claude/
@@ -53,7 +53,7 @@ secure-claude/
 1. **Never commit `.env` or `settings.local.json`** — both are in `.gitignore`.
 2. **Scope the filesystem MCP to the project root** — `.mcp.json` uses `${PROJECT_ROOT}`.
 3. **PreToolUse hook runs gitleaks on every Write** — see `hooks/secret-scan.sh`.
-4. **Read-only DB user for the Postgres MCP** — `.env.example` shows the `claude_ro` pattern.
+4. **Read-only credentials for any database MCP** — if you add one, scope it to SELECT-only.
 5. **Log every tool call** — `hooks/audit-log.sh` appends to `.claude/audit/tool-calls.jsonl`.
 
 ---
@@ -103,19 +103,12 @@ Prints every action without touching disk.
 ## After install
 
 1. `cp .env.example .env` and fill in real values (or better: source from your secrets manager).
-2. Create the read-only Postgres user:
-   ```sql
-   CREATE USER claude_ro WITH PASSWORD '...';
-   GRANT CONNECT ON DATABASE app TO claude_ro;
-   GRANT USAGE ON SCHEMA public TO claude_ro;
-   GRANT SELECT ON ALL TABLES IN SCHEMA public TO claude_ro;
-   ```
-3. Install [`gitleaks`](https://github.com/gitleaks/gitleaks) so `hooks/secret-scan.sh` has teeth:
+2. Install [`gitleaks`](https://github.com/gitleaks/gitleaks) so `hooks/secret-scan.sh` has teeth:
    ```bash
    brew install gitleaks   # or: go install github.com/gitleaks/gitleaks/v8@latest
    ```
-4. (Optional) Export `SLACK_WEBHOOK_URL` to enable the Notification hook.
-5. Open the project in Claude Code and run `/security-review` on your next diff.
+3. (Optional) Export `SLACK_WEBHOOK_URL` to enable the Notification hook.
+4. Open the project in Claude Code and run `/security-review` on your next diff.
 
 ---
 
