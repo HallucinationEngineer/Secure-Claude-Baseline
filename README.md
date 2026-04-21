@@ -58,14 +58,99 @@ secure-claude/
 
 ---
 
+## Prerequisites
+
+The hooks rely on a small set of common Unix tools. `jq`, `perl`, and `curl` are
+usually preinstalled; `sqlite3` and `gitleaks` are the ones you'll typically
+need to add.
+
+| Tool       | Purpose                                 | Required? |
+|------------|-----------------------------------------|-----------|
+| `bash`     | Runs every hook in `.claude/hooks/`     | Yes       |
+| `jq`       | Builds & redacts audit records          | Yes       |
+| `perl`     | Redaction regex engine                  | Yes       |
+| `curl`     | Remote audit forwarding + notifications | If remote |
+| `sqlite3`  | Primary local audit sink                | Recommended (falls back to JSONL) |
+| `gitleaks` | PreToolUse secret scan                  | Recommended (falls back to built-in regex) |
+
+### macOS
+
+```bash
+brew install jq sqlite gitleaks   # curl + perl ship with macOS
+```
+
+### Linux
+
+```bash
+# Debian / Ubuntu
+sudo apt-get install -y jq perl curl sqlite3
+# gitleaks — binary install (apt package often lags):
+curl -sSL https://github.com/gitleaks/gitleaks/releases/latest/download/gitleaks_8.18.0_linux_x64.tar.gz \
+  | tar -xz -C /tmp gitleaks && sudo mv /tmp/gitleaks /usr/local/bin/
+
+# Fedora / RHEL
+sudo dnf install -y jq perl curl sqlite
+
+# Arch
+sudo pacman -S jq perl curl sqlite gitleaks
+
+# Alpine (Docker)
+apk add bash jq perl curl sqlite
+```
+
+### Windows
+
+Native PowerShell can't run the `.sh` hooks directly — Claude Code hooks are
+bash scripts. Two supported paths:
+
+**Option A: WSL (recommended)**
+```powershell
+wsl --install                 # one-time, then reboot
+```
+Open your project from inside WSL (`\\wsl$\Ubuntu\...` or `cd /mnt/c/...`)
+and install prereqs using the Linux instructions above. Claude Code on
+Windows detects and uses WSL bash automatically for `.sh` hooks.
+
+**Option B: Git for Windows (Git Bash)**
+```powershell
+winget install --id Git.Git
+winget install --id jqlang.jq
+winget install --id SQLite.SQLite
+winget install --id Gitleaks.Gitleaks
+# curl + perl ship inside Git Bash's /usr/bin
+```
+Then run `bootstrap.sh` from a Git Bash shell (not PowerShell / cmd).
+Claude Code will invoke hooks via the bundled bash.
+
+**Option C: Scoop / Chocolatey**
+```powershell
+# scoop
+scoop install git jq sqlite gitleaks
+
+# chocolatey
+choco install git jq sqlite gitleaks
+```
+
+> Windows users: if you want native PowerShell hooks instead of bash, open an
+> issue — we can port the hooks to `.ps1` equivalents as a follow-up.
+
+### FreeBSD / OpenBSD
+
+```sh
+pkg install bash jq perl5 curl sqlite3 gitleaks
+```
+
+---
+
 ## Install
 
 The `bootstrap.sh` installer copies `secure-claude/` into either a project or your user home.
+On Windows, run it from WSL or Git Bash — see **Prerequisites** above.
 
 ### Local install (into an existing project)
 
 ```bash
-# From this repo's root:
+# macOS / Linux / WSL / Git Bash — from this repo's root:
 ./bootstrap.sh --local /path/to/your/project
 
 # Or interactively from the target project:
@@ -103,10 +188,7 @@ Prints every action without touching disk.
 ## After install
 
 1. `cp .env.example .env` and fill in real values (or better: source from your secrets manager).
-2. Install [`gitleaks`](https://github.com/gitleaks/gitleaks) so `hooks/secret-scan.sh` has teeth:
-   ```bash
-   brew install gitleaks   # or: go install github.com/gitleaks/gitleaks/v8@latest
-   ```
+2. Confirm prerequisites are installed — see **Prerequisites** above for your OS.
 3. (Optional) Export `SLACK_WEBHOOK_URL` to enable the Notification hook.
 4. (Optional) Configure the audit sink — see **Audit trail** below.
 5. Open the project in Claude Code and run `/security-review` on your next diff.
