@@ -4,7 +4,10 @@ This file is loaded into every Claude Code session for this project. Keep it sho
 
 ## Security posture
 
-This project follows the **Secure Claude Baseline**. In practice that means:
+This project follows the **Secure Claude Baseline**. The five non-negotiables
+below are the in-session rules for Claude; the same list is summarised for
+human readers in `README.md § The 5 non-negotiables` — keep both copies in
+sync if you edit either.
 
 1. **`.env` is never committed.** Secrets live in a secrets manager in prod and in `.env` (gitignored) locally. `.env.example` documents the keys.
 2. **Filesystem MCP is scoped to the project root.** No access above.

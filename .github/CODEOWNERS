@@ -23,6 +23,16 @@
 #   [x] Do not allow bypassing the above settings (applies to admins too)
 # ==============================================================================
 
+# Owners.
+#
+# @hallucinationengineer is the placeholder for the upstream maintainer of
+# this baseline. If you are forking this repo for your own team, REPLACE
+# every occurrence below with your own GitHub username, org team, or both
+# (e.g. `@acme/platform-security @jane.doe`). A CODEOWNERS rule that points
+# at a user who isn't a collaborator on this repo silently fails — branch
+# protection will then let PRs through without review, so the fix is
+# mandatory before you enable "Require review from Code Owners".
+
 # Fallback — everything needs at least one maintainer approval.
 *                                   @hallucinationengineer
 

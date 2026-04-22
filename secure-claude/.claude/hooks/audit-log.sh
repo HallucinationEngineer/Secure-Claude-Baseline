@@ -26,6 +26,13 @@
 #
 # Local failures never break the session. Remote failures are silent by design
 # so that an unreachable SIEM can't wedge the developer's agent.
+#
+# We deliberately omit `-e` from `set` below: this hook MUST NOT exit non-zero
+# on a sink failure (a flaky disk, a missing jq, a bad sqlite3) because that
+# would propagate to Claude Code as a tool-call failure and disrupt the user.
+# Instead, every sink call is wrapped in `|| ...` fallbacks and the script
+# always reaches the `exit 0` at the bottom. Do NOT add `-e` without rewriting
+# the failure-handling end-to-end.
 set -uo pipefail
 
 LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib"

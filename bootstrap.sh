@@ -312,28 +312,35 @@ run_verify() {
 JSON
 
   merge_settings_json "${tmp}/user-settings.json" "${SOURCE_DIR}/.claude/settings.json" "${tmp}/merged.json"
+
+  # Helper: is $2 present in the array at jq path $1 inside ${tmp}/merged.json?
+  # e.g. has_rule '.permissions.deny' 'Read(.env)'
+  has_rule() {
+    jq -e --arg v "$2" "$1 | index(\$v)" "${tmp}/merged.json" >/dev/null
+  }
+
   if ! jq empty "${tmp}/merged.json" 2>/dev/null; then
     fail "merge produced invalid JSON"
   else
     ok "merge produces valid JSON"
 
     # User's unique deny rule MUST survive
-    if jq -e '.permissions.deny | index("Read(**/*.pem)")' "${tmp}/merged.json" >/dev/null; then
+    if has_rule '.permissions.deny' 'Read(**/*.pem)'; then
       ok "merge preserves user's unique deny rule"
     else
       fail "merge DROPPED a user's deny rule (Read(**/*.pem))"
     fi
 
     # Baseline's deny rules must also be present
-    if jq -e '.permissions.deny | index("Read(.env)")' "${tmp}/merged.json" >/dev/null; then
+    if has_rule '.permissions.deny' 'Read(.env)'; then
       ok "merge preserves baseline's deny rules"
     else
       fail "merge dropped baseline's deny rule (Read(.env))"
     fi
 
     # User's unique allow rule survives, baseline's allow rules also present
-    if jq -e '.permissions.allow | index("Bash(docker:*)")' "${tmp}/merged.json" >/dev/null \
-       && jq -e '.permissions.allow | index("Read")' "${tmp}/merged.json" >/dev/null; then
+    if has_rule '.permissions.allow' 'Bash(docker:*)' \
+       && has_rule '.permissions.allow' 'Read'; then
       ok "merge unions allow rules"
     else
       fail "merge did not union allow rules correctly"
@@ -433,9 +440,17 @@ esac
 log()  { printf '  %s\n' "$*"; }
 act()  {
   if [ "$DRY_RUN" -eq 1 ]; then printf '  [dry-run] %s\n' "$*"; return 0; fi
-  # Callers pass a single pre-quoted shell command string on purpose (so they
-  # can embed whitespace-bearing paths via \"..\" escaping). eval is the
-  # right primitive here — not untrusted user input.
+  # SECURITY: every caller of `act` passes a STATIC, internally-constructed
+  # command string. The only variables interpolated are:
+  #   - $SOURCE_DIR  : derived from $BASH_SOURCE (this script's own path)
+  #   - $TARGET      : validated via `cd "$TARGET" 2>/dev/null && pwd` before
+  #                    use (lines 414-418), so ./../;rm -rf / can't survive
+  #   - $DEST_CLAUDE : computed from validated $TARGET or $HOME
+  #   - $dest, $src, $sub, $gi_dest : derived from the above
+  # No user-supplied free-form input ever reaches `eval`. The pre-quoted
+  # string form is needed so paths with spaces survive (`cp "$src" "$dest"`).
+  # If you add a new act caller, audit that the string is constant w.r.t.
+  # untrusted input — or rewrite it to use a non-eval helper.
   # shellcheck disable=SC2294
   eval "$@"
 }

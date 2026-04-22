@@ -118,5 +118,9 @@ break-glass override — see `README.md`.
 
 ## Version
 
-Last reviewed: 2026-04-21.
-Revisit: on any CI workflow change, or quarterly, whichever comes first.
+Review cadence: on any CI workflow change, or quarterly — whichever comes
+first. The authoritative review history is the file's git log:
+
+```bash
+git log --follow -- SECURITY.md
+```

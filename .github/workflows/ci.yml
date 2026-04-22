@@ -22,6 +22,12 @@ on:
 
 permissions: {}   # deny-all at workflow scope; each job opts in to what it needs
 
+# Pinned tool versions. Bumping here updates every job that uses them — keeps
+# the self-test job and the gitleaks scan job from drifting out of sync. Bump
+# in lockstep with README.md § Prerequisites.
+env:
+  GITLEAKS_VERSION: "8.18.4"
+
 jobs:
   shellcheck:
     name: ShellCheck
@@ -67,8 +73,7 @@ jobs:
           sudo apt-get install -y jq perl curl sqlite3
       - name: Install gitleaks
         run: |
-          VERSION=8.18.4
-          curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_x64.tar.gz" \
+          curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
             | sudo tar -xz -C /usr/local/bin gitleaks
           gitleaks version
       - name: Run self-test
@@ -117,7 +122,9 @@ jobs:
       - name: Validate all YAML
         run: |
           set -e
-          for f in $(find . -name '*.yml' -o -name '*.yaml' -not -path './.git/*'); do
+          # The -o alternation needs its own parens, otherwise -not -path
+          # only binds to -name '*.yaml' and .git/ YAML gets scanned.
+          for f in $(find . \( -name '*.yml' -o -name '*.yaml' \) -not -path './.git/*'); do
             echo "→ $f"
             yq '.' "$f" > /dev/null
           done
@@ -138,8 +145,7 @@ jobs:
           persist-credentials: false
       - name: Install gitleaks
         run: |
-          VERSION=8.18.4
-          curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_x64.tar.gz" \
+          curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
             | sudo tar -xz -C /usr/local/bin gitleaks
       - name: Scan repo history
         run: |

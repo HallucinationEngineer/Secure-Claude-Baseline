@@ -65,7 +65,10 @@ done
 
 # --- Unicode tag block (invisible smuggling) ---
 if command -v perl >/dev/null 2>&1; then
-  if printf '%s' "$CONTENT" | perl -CSD -ne "exit 0 if ${UNICODE_TAG_BLOCK_PERL}; exit 1" 2>/dev/null; then
+  # -0777 puts perl in slurp mode so we scan the ENTIRE content, not just the
+  # first line. Without -0777, `-ne ... exit 1` runs on each line and exits 1
+  # on the first non-matching line — missing tags that appear further down.
+  if printf '%s' "$CONTENT" | perl -CSD -0777 -ne "exit 0 if ${UNICODE_TAG_BLOCK_PERL}; exit 1" 2>/dev/null; then
     FINDINGS+=("unicode tag block (U+E0000..U+E007F) — invisible instruction smuggling")
   fi
 fi
