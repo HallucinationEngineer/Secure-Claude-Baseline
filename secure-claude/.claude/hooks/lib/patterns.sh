@@ -59,6 +59,13 @@ DESTRUCTIVE_COMMAND_PATTERNS=(
 # leave the box. High-confidence shapes only; we deliberately do NOT try to
 # catch arbitrary `password=xxx` in code strings — that would corrupt the
 # JSON record and is the PreToolUse secret-scan hook's job anyway.
+#
+# WARNING: PERL_REDACTION is ONLY safe when passed to `perl -pe` (or -ne,
+# -e with slurp). It contains embedded `$1` backrefs, multiline quantifiers,
+# and unescaped double quotes that would break `sed`, `awk`, bash parameter
+# expansion, or any language that isn't perl. If you need the same logic
+# somewhere else, re-express it in that language — do NOT interpolate this
+# string.
 
 read -r -d '' PERL_REDACTION <<'PERL' || true
 s/AKIA[0-9A-Z]{16}/***REDACTED_AWS***/g;

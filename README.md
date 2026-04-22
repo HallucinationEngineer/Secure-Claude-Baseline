@@ -52,6 +52,9 @@ secure-claude/
 
 ### The 5 non-negotiables (from Okan's post)
 
+> Keep this list in sync with `secure-claude/CLAUDE.md § Security posture` —
+> that file is the in-session version Claude reads on every load.
+
 1. **Never commit `.env` or `settings.local.json`** — both are in `.gitignore`.
 2. **Scope the filesystem MCP to the project root** — `.mcp.json` uses `${PROJECT_ROOT}`.
 3. **PreToolUse hook runs gitleaks on every Write** — see `hooks/secret-scan.sh`.
@@ -86,8 +89,9 @@ brew install jq sqlite gitleaks   # curl + perl ship with macOS
 ```bash
 # Debian / Ubuntu
 sudo apt-get install -y jq perl curl sqlite3
-# gitleaks — binary install (apt package often lags):
-curl -sSL https://github.com/gitleaks/gitleaks/releases/latest/download/gitleaks_8.18.0_linux_x64.tar.gz \
+# gitleaks — binary install (apt package often lags). Keep this version in
+# lockstep with .github/workflows/ci.yml's GITLEAKS_VERSION env var.
+curl -sSL https://github.com/gitleaks/gitleaks/releases/download/v8.18.4/gitleaks_8.18.4_linux_x64.tar.gz \
   | tar -xz -C /tmp gitleaks && sudo mv /tmp/gitleaks /usr/local/bin/
 
 # Fedora / RHEL
@@ -357,6 +361,72 @@ claude --version            # the CLI picks up settings.json automatically
 echo "test" > /tmp/fakesecret && claude -p "write 'AKIAIOSFODNN7EXAMPLE' to ./test.txt"
 # → the PreToolUse secret-scan hook should BLOCK the write
 ```
+
+---
+
+## Troubleshooting
+
+If something in the baseline isn't behaving, `./bootstrap.sh --verify` is the
+fastest diagnostic — it exercises every hook and prints a pass/fail line per
+check. The common failure modes below map to specific PASS/FAIL lines.
+
+### `gitleaks: not found` or secret-scan hook times out
+
+`hooks/secret-scan.sh` prefers `gitleaks` and falls back to a built-in regex
+set when it's absent. If installation instructions for your OS above didn't
+take, confirm `command -v gitleaks` prints a path. On Linux the apt package
+often lags the latest release — use the binary install block under
+**Prerequisites → Linux**.
+
+If `gitleaks` is installed but the hook appears to hang, it's almost always
+scanning a huge file (e.g. a committed `node_modules/` tarball). Add the
+offending path to `.gitleaks.toml`'s `allowlist.paths`.
+
+### `audit-log.sh` never writes to `.claude/audit/tool-calls.db`
+
+The hook chooses SQLite only if `sqlite3` is on `PATH`; otherwise it silently
+falls back to JSONL. Check `.claude/audit/tool-calls.jsonl` — if records are
+there but not the DB, install sqlite3 and re-run (`brew install sqlite`,
+`apt-get install sqlite3`, etc.). The hook is designed to never break the
+session on a sink failure, so errors are swallowed by default; to debug, run
+the hook by hand with a synthetic event:
+
+```bash
+printf '{"hook_event_name":"PostToolUse","tool_name":"Write","tool_input":{"file_path":"/tmp/x","content":"hello"}}' \
+  | .claude/hooks/audit-log.sh
+```
+
+### `prompt-injection-scan.sh` fires on your own docs
+
+The scanner is deliberately tuned for recall, so benign documents containing
+phrases like "ignore the previous section" can trip the warn. Options:
+
+- Keep the default (`CLAUDE_PROMPT_INJECTION=warn`) and let Claude see the
+  warning — warns are informational, not blocking.
+- Add a project-specific allowlist by editing the
+  `PROMPT_INJECTION_PATTERNS` array in `.claude/hooks/lib/patterns.sh`.
+- Set `CLAUDE_PROMPT_INJECTION=off` for a single session if you're reading
+  many adversarial-example fixtures and the noise is overwhelming.
+
+### `settings.json` merge produced a file I don't like
+
+Every merge writes a timestamped backup at `settings.json.bak.<YYYYMMDDhhmmss>`
+before rewriting. Restore with `mv settings.json.bak.<ts> settings.json`. If
+you want to bypass the merge entirely on the next install, pass
+`./bootstrap.sh --no-merge` (this also implies `--force`).
+
+### Hook script has `Permission denied` / isn't executable
+
+The installer runs `chmod +x` on everything in `.claude/hooks/*.sh`, but a
+copy from Windows to WSL can drop the executable bit. Re-run
+`chmod +x .claude/hooks/*.sh` or use `./bootstrap.sh --force`.
+
+### Windows: hooks don't run at all
+
+Claude Code detects WSL for `.sh` hooks, but only when invoked from inside a
+WSL shell or from a Windows-native session where `wsl.exe` is on PATH. If
+you're running Claude Code in PowerShell without WSL, install Git Bash (see
+**Prerequisites → Windows Option B**) and launch Claude from that shell.
 
 ---
 
